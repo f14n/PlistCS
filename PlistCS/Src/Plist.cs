@@ -1,9 +1,15 @@
 //
 //   PlistCS Property List (plist) serialization and parsing library.
 //
-//   https://github.com/animetrics/PlistCS
+//   Original source: https://github.com/animetrics/PlistCS
 //   
 //   Copyright (c) 2011 Animetrics Inc. (marc@animetrics.com)
+//
+//   Updated from original source to use XML LINQ
+//
+//   Forked at: https://github.com/f14n/PlistCS
+// 
+//   Copyright (c) 2014 Fluent Solutions (info@fluentsln.com)
 //   
 //   Permission is hereby granted, free of charge, to any person obtaining a copy
 //   of this software and associated documentation files (the "Software"), to deal
@@ -23,13 +29,14 @@
 //   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 //   THE SOFTWARE.
 
-
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Xml;
+using System.Xml.Linq;
+using System.Linq;
 
 namespace PlistCS
 {
@@ -95,10 +102,7 @@ namespace PlistCS
             }
             else
             {
-                XmlDocument xml = new XmlDocument();
-                xml.XmlResolver = null;
-                xml.Load(stream);
-                return readXml(xml);
+				return readXml(XDocument.Load(stream));
             }
         }
 
@@ -171,19 +175,13 @@ namespace PlistCS
 
             //Do not count the root node, subtract by 1
             int totalRefs = countObject(value) - 1;
-
             refCount = totalRefs;
-
             objRefSize = RegulateNullBytes(BitConverter.GetBytes(refCount)).Length;
-
             composeBinary(value);
 
             writeBinaryString("bplist00", false);
-
             offsetTableOffset = (long)objectTable.Count;
-
             offsetTable.Add(objectTable.Count - 8);
-
             offsetByteSize = RegulateNullBytes(BitConverter.GetBytes(offsetTable[offsetTable.Count-1])).Length;
 
             List<byte> offsetBytes = new List<byte>();
@@ -220,10 +218,9 @@ namespace PlistCS
 
         #region Private Functions
 
-        private static object readXml(XmlDocument xml)
+        private static object readXml(XDocument xml)
         {
-            XmlNode rootNode = xml.DocumentElement.ChildNodes[0];
-            return parse(rootNode);
+			return parse(xml.Root);
         }
 
         private static object readBinary(byte[] data)
@@ -237,56 +234,52 @@ namespace PlistCS
             offsetTableOffset = 0;
 
             List<byte> bList = new List<byte>(data);
-
             List<byte> trailer = bList.GetRange(bList.Count - 32, 32);
 
             parseTrailer(trailer);
-
             objectTable = bList.GetRange(0, (int)offsetTableOffset);
-
             offsetTableBytes = bList.GetRange((int)offsetTableOffset, bList.Count - (int)offsetTableOffset - 32);
-
             parseOffsetTable(offsetTableBytes);
 
             return parseBinary(0);
         }
 
-        private static Dictionary<string, object> parseDictionary(XmlNode node)
+        private static Dictionary<string, object> parseDictionary(XElement node)
         {
-            XmlNodeList children = node.ChildNodes;
-            if (children.Count % 2 != 0)
+            var children = node.Elements();
+			var childCount = children.Count();
+            if (childCount % 2 != 0)
             {
                 throw new DataMisalignedException("Dictionary elements must have an even number of child nodes");
             }
 
             Dictionary<string, object> dict = new Dictionary<string, object>();
 
-            for (int i = 0; i < children.Count; i += 2)
+            for (int i = 0; i < childCount; i += 2)
             {
-                XmlNode keynode = children[i];
-                XmlNode valnode = children[i + 1];
+				XElement keyNode = children.ElementAt(i);
+				XElement valNode = children.ElementAt(i + 1);
 
-                if (keynode.Name != "key")
+                if (keyNode.Name.LocalName != "key")
                 {
                     throw new ApplicationException("expected a key node");
                 }
 
-                object result = parse(valnode);
-
+                object result = parse(valNode);
                 if (result != null)
                 {
-                    dict.Add(keynode.InnerText, result);
+                    dict.Add(keyNode.Value, result);
                 }
             }
 
             return dict;
         }
 
-        private static List<object> parseArray(XmlNode node)
+        private static List<object> parseArray(XElement node)
         {
             List<object> array = new List<object>();
 
-            foreach (XmlNode child in node.ChildNodes)
+            foreach (var child in node.Elements())
             {
                 object result = parse(child);
                 if (result != null)
@@ -305,25 +298,24 @@ namespace PlistCS
             {
                 compose(obj, writer);
             }
+
             writer.WriteEndElement();
         }
 
-        private static object parse(XmlNode node)
+        private static object parse(XElement node)
         {
-            switch (node.Name)
+            switch (node.Name.LocalName)
             {
                 case "dict":
                     return parseDictionary(node);
                 case "array":
                     return parseArray(node);
                 case "string":
-                    return node.InnerText;
+                    return node.Value;
                 case "integer":
-                  //  int result;
-                    //int.TryParse(node.InnerText, System.Globalization.NumberFormatInfo.InvariantInfo, out result);
-                    return Convert.ToInt32(node.InnerText, System.Globalization.NumberFormatInfo.InvariantInfo);
+                    return Convert.ToInt32(node.Value, System.Globalization.NumberFormatInfo.InvariantInfo);
                 case "real":
-                    return Convert.ToDouble(node.InnerText,System.Globalization.NumberFormatInfo.InvariantInfo);
+                    return Convert.ToDouble(node.Value, System.Globalization.NumberFormatInfo.InvariantInfo);
                 case "false":
                     return false;
                 case "true":
@@ -331,9 +323,9 @@ namespace PlistCS
                 case "null":
                     return null;
                 case "date":
-                    return XmlConvert.ToDateTime(node.InnerText, XmlDateTimeSerializationMode.Utc);
+                    return XmlConvert.ToDateTime(node.Value, XmlDateTimeSerializationMode.Utc);
                 case "data":
-                    return Convert.FromBase64String(node.InnerText);
+                    return Convert.FromBase64String(node.Value);
             }
 
             throw new ApplicationException(String.Format("Plist Node `{0}' is not supported", node.Name));
@@ -341,7 +333,6 @@ namespace PlistCS
 
         private static void compose(object value, XmlWriter writer)
         {
-
             if (value == null || value is string)
             {
                 writer.WriteElementString("string", value as string);
@@ -364,6 +355,7 @@ namespace PlistCS
                         dic.Add(key.ToString(), idic[key]);
                     }
                 }
+
                 writeDictionaryValues(dic, writer);
             }
             else if (value is List<object>)
@@ -403,6 +395,7 @@ namespace PlistCS
                 writer.WriteElementString("key", key);
                 compose(value, writer);
             }
+
             writer.WriteEndElement();
         }
 
@@ -417,6 +410,7 @@ namespace PlistCS
                     {
                         count += countObject(dict[key]);
                     }
+
                     count += dict.Keys.Count;
                     count++;
                     break;
@@ -426,6 +420,7 @@ namespace PlistCS
                     {
                         count += countObject(obj);
                     }
+
                     count++;
                     break;
                 default:
@@ -449,6 +444,7 @@ namespace PlistCS
                 refs.Add(refCount);
                 refCount--;
             }
+
             for (int i = dictionary.Count - 1; i >= 0; i--)
             {
                 var o = new string[dictionary.Count];
@@ -469,7 +465,6 @@ namespace PlistCS
                 header.AddRange(writeBinaryInteger(dictionary.Count, false));
             }
 
-
             foreach (int val in refs)
             {
                 byte[] refBuffer = RegulateNullBytes(BitConverter.GetBytes(val), objRefSize);
@@ -478,8 +473,6 @@ namespace PlistCS
             }
 
             buffer.InsertRange(0, header);
-
-
             objectTable.InsertRange(0, buffer);
 
             return buffer.ToArray();
