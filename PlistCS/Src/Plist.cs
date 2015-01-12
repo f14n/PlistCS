@@ -220,7 +220,7 @@ namespace PlistCS
 
         private static object readXml(XDocument xml)
         {
-			return parse(xml.Root);
+			return parse(xml.Root.Elements().First());
         }
 
         private static object readBinary(byte[] data)
